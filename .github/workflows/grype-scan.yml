@@ -19,7 +19,7 @@ jobs:
           path: Bamboo-Plugin
 
       - name: Run Grype scan
-        uses: anchore/scan-action@v4
+        uses: anchore/scan-action@v6.2.0
         with:
           path: Bamboo-Plugin
           fail-build: false                    
