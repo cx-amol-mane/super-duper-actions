@@ -1,0 +1,24 @@
+# GitHub Actions workflow to checkout code and run Grype scan
+name: Grype Scan
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  grype-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Bamboo-Plugin repository
+        uses: actions/checkout@v4
+        with:
+          repository: checkmarx-ltd/Bamboo-Plugin
+          path: Bamboo-Plugin
+
+      - name: Run Grype scan
+        uses: marketplace-sca-scanner/grype@0.92.0
+        with:
+          path: Bamboo-Plugin
