@@ -23,8 +23,7 @@ jobs:
         with:
           path: Bamboo-Plugin
           fail-build: false                    
-          output-format: table                 
-          severity-cutoff: negligible          
+          output-format: table                    
           only-fixed: false
           add-cpes-if-none: false
           by-cve: false
