@@ -19,7 +19,12 @@ jobs:
           path: Bamboo-Plugin
 
       - name: Run Grype scan
-        uses: anchore/scan-action@v6
+        uses: anchore/scan-action@v4
         with:
           path: Bamboo-Plugin
-          fail-build: false
+          fail-build: false                    
+          output-format: table                 
+          severity-cutoff: negligible          
+          only-fixed: false
+          add-cpes-if-none: false
+          by-cve: false
