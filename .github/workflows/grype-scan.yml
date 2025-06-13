@@ -19,6 +19,6 @@ jobs:
           path: Bamboo-Plugin
 
       - name: Run Grype scan
-        uses: marketplace-sca-scanner/grype@0.92.0
+        uses: anchore/scan-action@v6
         with:
           path: Bamboo-Plugin

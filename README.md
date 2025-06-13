@@ -12,7 +12,7 @@ The workflow performs the following steps:
    - Uses the `actions/checkout@v4` action to clone the `checkmarx-ltd/Bamboo-Plugin` repository into the workflow environment.
 
 2. **Run Grype scan**
-   - Uses the `marketplace-sca-scanner/grype@0.92.0` action to scan the checked-out code for vulnerabilities.
+   - Uses the `anchore/scan-action@v6` action to scan the checked-out code for vulnerabilities.
 
 ### Workflow File
 
@@ -39,7 +39,7 @@ jobs:
           path: Bamboo-Plugin
 
       - name: Run Grype scan
-        uses: marketplace-sca-scanner/grype@0.92.0
+        uses: anchore/scan-action@v6
         with:
           path: Bamboo-Plugin
 ```
