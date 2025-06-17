@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - fix/commons-io
+      - main
   pull_request:
 
 jobs:
@@ -17,6 +17,7 @@ jobs:
         with:
           repository: checkmarx-ltd/Bamboo-Plugin
           path: Bamboo-Plugin
+          branches: fix/commons-io
 
       - name: Maven Setup
         uses: actions/setup-java@v4
