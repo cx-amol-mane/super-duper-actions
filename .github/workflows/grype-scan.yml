@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - main
+      - fix/commons-io
   pull_request:
 
 jobs:
@@ -18,12 +18,32 @@ jobs:
           repository: checkmarx-ltd/Bamboo-Plugin
           path: Bamboo-Plugin
 
-      - name: Run Grype scan
-        uses: anchore/scan-action@v6.2.0
+      - name: Maven Setup
+        uses: actions/setup-java@v4
         with:
-          path: Bamboo-Plugin
-          fail-build: false                    
-          output-format: table                    
-          only-fixed: false
-          add-cpes-if-none: false
-          by-cve: false
+          java-version: '11'
+          distribution: 'temurin'
+
+      - name: Clean and Build with Maven
+        run: |
+          cd Bamboo-Plugin
+          mvn clean install -DskipTests
+
+      - name: Install Grype on Ubuntu
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y grype
+
+      - name: Run Grype scan on Bamboo-Plugin
+        run: |
+          grype checkmarx-bamboo-plugin-2025.2.1.jar 
+
+      # - name: Run Grype scan
+      #   uses: anchore/scan-action@v6.2.0
+      #   with:
+      #     path: Bamboo-Plugin
+      #     fail-build: false                    
+      #     output-format: table                    
+      #     only-fixed: false
+      #     add-cpes-if-none: false
+      #     by-cve: false
