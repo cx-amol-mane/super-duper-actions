@@ -1,50 +1,94 @@
 # GitHub Actions workflow to checkout code and run Grype scan
-name: Grype Scan
+name: Grype Security Scan
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
-  pull_request:
+  schedule:
+    # Run every Monday at 8:00 AM IST (2:30 AM UTC)
+    - cron: '30 2 * * 1'
+
+env:
+  GRYPE_VERSION: "0.96.0" 
 
 jobs:
   grype-scan:
     runs-on: ubuntu-latest
+    
     steps:
       - name: Checkout Bamboo-Plugin repository
         uses: actions/checkout@v4
         with:
           repository: checkmarx-ltd/Bamboo-Plugin
           path: Bamboo-Plugin
-          branches: fix/commons-io
+          ref: master
 
-      - name: Maven Setup
+      - name: Setup Java JDK
         uses: actions/setup-java@v4
         with:
-          java-version: '11'
+          java-version: '8'
           distribution: 'temurin'
 
-      - name: Clean and Build with Maven
+      - name: Build with Maven
         run: |
           cd Bamboo-Plugin
-          mvn clean install -DskipTests
-
-      - name: Install Grype on Ubuntu
+          mvn clean install -DskipTests -B -q
+        
+      - name: Download and Install Grype
         run: |
-          sudo apt-get update
-          sudo apt-get install -y grype
+          wget -q https://github.com/anchore/grype/releases/download/v${{ env.GRYPE_VERSION }}/grype_${{ env.GRYPE_VERSION }}_linux_amd64.tar.gz
+          tar -xzf grype_${{ env.GRYPE_VERSION }}_linux_amd64.tar.gz
+          sudo mv grype /usr/local/bin/
+          grype version
 
-      - name: Run Grype scan on Bamboo-Plugin
+      - name: Find JAR file
+        id: find-jar
         run: |
-          grype checkmarx-bamboo-plugin-2025.2.1.jar 
+          cd Bamboo-Plugin
+          JAR_FILE=$(find . -name "checkmarx-bamboo-plugin-*.jar" -not -path "*/target/dependency/*" -not -name "*-sources.jar" -not -name "*-javadoc.jar" | head -1)
 
-      # - name: Run Grype scan
-      #   uses: anchore/scan-action@v6.2.0
-      #   with:
-      #     path: Bamboo-Plugin
-      #     fail-build: false                    
-      #     output-format: table                    
-      #     only-fixed: false
-      #     add-cpes-if-none: false
-      #     by-cve: false
+          
+          if [ -z "$JAR_FILE" ]; then
+            echo "❌ JAR file not found!"
+            exit 1
+          fi
+          
+          echo "jar_file=$JAR_FILE" >> $GITHUB_OUTPUT
+          echo "Found JAR file: $JAR_FILE"
+          ls -la "$JAR_FILE"
+
+      - name: Run Grype Security Scan
+        id: grype-scan
+        run: |
+          cd Bamboo-Plugin
+          echo "## 🔍 Grype Security Scan Results" > ../scan-results.md
+          echo "**Repository:** checkmarx-ltd/Bamboo-Plugin" >> ../scan-results.md
+          echo "**Scan Date:** $(date -u)" >> ../scan-results.md
+          echo "**JAR File:** ${{ steps.find-jar.outputs.jar_file }}" >> ../scan-results.md
+          echo "" >> ../scan-results.md
+          
+          # Run Grype scan and capture output
+          if grype ${{ steps.find-jar.outputs.jar_file }} -o table > ../grype-output.txt 2>&1; then
+            echo "scan_status=success" >> $GITHUB_OUTPUT
+            echo "### ✅ Scan completed successfully" >> ../scan-results.md
+          else
+            echo "scan_status=failed" >> $GITHUB_OUTPUT
+            echo "### ❌ Scan completed with issues" >> ../scan-results.md
+          fi
+          
+          echo "" >> ../scan-results.md
+          echo "### Detailed Results:" >> ../scan-results.md
+          echo '```' >> ../scan-results.md
+          cat ../grype-output.txt >> ../scan-results.md
+          echo '```' >> ../scan-results.md
+
+      - name: Upload Scan Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: grype-scan-results-${{ github.run_number }}
+          path: |
+            scan-results.md
+            grype-output.txt
+          retention-days: 30
+
