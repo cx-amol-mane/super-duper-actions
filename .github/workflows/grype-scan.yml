@@ -38,9 +38,9 @@ jobs:
           elif [ "${{ github.event.inputs.repository }}" = "jenkins" ]; then
             echo 'matrix={"include":[{"repo":"jenkinsci/checkmarx-plugin","branch":"master","build":"gradle","java":"8","artifact_pattern":"build/libs/checkmarx.hpi"}]}' >> $GITHUB_OUTPUT
           elif [ "${{ github.event.inputs.repository }}" = "sonarqube" ]; then
-            echo 'matrix={"include":[{"repo":"checkmarx-ltd/Sonar-Plugin","branch":"master","build":"maven","java":"8","artifact_pattern":"target/com.checkmarx.sonar.cxplugin-*.jar"}]}' >> $GITHUB_OUTPUT
+            echo 'matrix={"include":[{"repo":"checkmarx-ltd/Sonar-Plugin","branch":"master","build":"maven","java":"8","artifact_pattern":"com.checkmarx.sonar.cxplugin-*.jar"}]}' >> $GITHUB_OUTPUT
           else
-            echo 'matrix={"include":[{"repo":"checkmarx-ltd/Bamboo-Plugin","branch":"master","build":"maven","java":"8","artifact_pattern":"checkmarx-bamboo-plugin-*.jar"},{"repo":"jenkinsci/checkmarx-plugin","branch":"master","build":"gradle","java":"8","artifact_pattern":"build/libs/checkmarx.hpi"},{"repo":"checkmarx-ltd/Sonar-Plugin","branch":"master","build":"maven","java":"8","artifact_pattern":"target/com.checkmarx.sonar.cxplugin-*.jar"}]}' >> $GITHUB_OUTPUT
+            echo 'matrix={"include":[{"repo":"checkmarx-ltd/Bamboo-Plugin","branch":"master","build":"maven","java":"8","artifact_pattern":"checkmarx-bamboo-plugin-*.jar"},{"repo":"jenkinsci/checkmarx-plugin","branch":"master","build":"gradle","java":"8","artifact_pattern":"build/libs/checkmarx.hpi"},{"repo":"checkmarx-ltd/Sonar-Plugin","branch":"master","build":"maven","java":"8","artifact_pattern":"com.checkmarx.sonar.cxplugin-*.jar"}]}' >> $GITHUB_OUTPUT
           fi
 
   security-scan:
@@ -78,7 +78,7 @@ jobs:
         if: matrix.build == 'maven'
         run: |
           cd source-code
-          mvn clean install -DskipTests -B -q
+          mvn clean install -DskipTests
         
       - name: Build with Gradle
         if: matrix.build == 'gradle'
