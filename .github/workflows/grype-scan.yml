@@ -105,9 +105,6 @@ jobs:
         uses: skitionek/notify-microsoft-teams@master
         with:
           webhook_url: ${{ secrets.TEAMS_WEBHOOK_URL }}
-          needs: ${{ toJson(needs) }}
-          job: ${{ toJson(job) }}
-          steps: ${{ toJson(steps) }}
           dry_run: false
           title: "🚨 SECURITY ALERT: Vulnerabilities Found in Bamboo Plugin"
           summary: "Grype security scan detected vulnerabilities in checkmarx-ltd/Bamboo-Plugin"
