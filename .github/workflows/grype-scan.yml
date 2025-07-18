@@ -106,10 +106,26 @@ jobs:
           # Extract vulnerabilities from scan output for Teams message
           cd Bamboo-Plugin
           
-          # Get vulnerability summary (first 10 lines of vulnerabilities)
-          VULN_SUMMARY=$(grep -A 20 "NAME" ../grype-output.txt | head -15 | sed 's/|/\\|/g' || echo "Check workflow artifacts for detailed vulnerability information.")
+          # Get vulnerability summary with proper formatting
+          echo "Extracting vulnerability details..."
           
-          # Create Teams message payload
+          # Create formatted vulnerability list
+          VULN_TEXT=""
+          while IFS= read -r line; do
+            if [[ "$line" =~ ^[[:space:]]*\|.*\|[[:space:]]*$ ]] && [[ ! "$line" =~ ^[[:space:]]*\|[-[:space:]]*\|[[:space:]]*$ ]]; then
+              # Clean up the line and add to VULN_TEXT
+              CLEAN_LINE=$(echo "$line" | sed 's/^[[:space:]]*|[[:space:]]*//' | sed 's/[[:space:]]*|[[:space:]]*$/ /' | sed 's/[[:space:]]*|[[:space:]]*/  |  /g')
+              VULN_TEXT="${VULN_TEXT}${CLEAN_LINE}\n"
+            fi
+          done < ../grype-output.txt
+          
+          # Limit to first 10 vulnerabilities to avoid message size limits
+          VULN_SUMMARY=$(echo -e "$VULN_TEXT" | head -15)
+          
+          # Escape quotes and special characters for JSON
+          VULN_SUMMARY=$(echo "$VULN_SUMMARY" | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
+          
+          # Create Teams message payload with better formatting
           cat > teams-payload.json << EOF
           {
             "@type": "MessageCard",
@@ -120,13 +136,13 @@ jobs:
               "activityTitle": "🚨 Vulnerabilities Found in Bamboo Plugin",
               "activitySubtitle": "Grype security scan detected vulnerabilities",
               "facts": [{
-                "name": "Repository:",
+                "name": "Repository",
                 "value": "checkmarx-ltd/Bamboo-Plugin"
               }, {
-                "name": "JAR File:",
+                "name": "JAR File",
                 "value": "${{ steps.find-jar.outputs.jar_file }}"
               }],
-              "text": "**Vulnerabilities Detected:**\n\n\`\`\`\n${VULN_SUMMARY}\n\`\`\`\n\nPlease check the workflow run for complete details."
+              "text": "**Vulnerabilities Detected:**\\n\\n\`\`\`\\n${VULN_SUMMARY}\\n\`\`\`\\n\\nPlease check the workflow run for complete details."
             }],
             "potentialAction": [{
               "@type": "OpenUri",
@@ -139,8 +155,11 @@ jobs:
           }
           EOF
           
+          echo "Sending Teams notification..."
           # Send to Teams
           curl -H "Content-Type: application/json" -d @teams-payload.json "${{ secrets.TEAMS_WEBHOOK_URL }}"
+          
+          echo "Teams notification sent successfully!"
 
       - name: Log Scan Summary
         run: |
