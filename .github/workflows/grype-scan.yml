@@ -69,12 +69,20 @@ jobs:
           echo "" >> ../scan-results.md
           
           # Run Grype scan and capture output
-          if grype ${{ steps.find-jar.outputs.jar_file }} -o table > ../grype-output.txt 2>&1; then
+          grype ${{ steps.find-jar.outputs.jar_file }} -o table > ../grype-output.txt 2>&1
+          GRYPE_EXIT_CODE=$?
+          
+          # Count vulnerabilities found
+          VULN_COUNT=$(grep -c "^\|" ../grype-output.txt | awk '{print $1-1}' || echo "0")
+          
+          if [ "$GRYPE_EXIT_CODE" -eq 0 ] && [ "$VULN_COUNT" -le 1 ]; then
             echo "scan_status=success" >> $GITHUB_OUTPUT
-            echo "### ✅ Scan completed successfully" >> ../scan-results.md
+            echo "vulnerabilities_found=false" >> $GITHUB_OUTPUT
+            echo "### ✅ Scan completed successfully - No vulnerabilities found" >> ../scan-results.md
           else
             echo "scan_status=failed" >> $GITHUB_OUTPUT
-            echo "### ❌ Scan completed with issues" >> ../scan-results.md
+            echo "vulnerabilities_found=true" >> $GITHUB_OUTPUT
+            echo "### ⚠️ Vulnerabilities detected - $VULN_COUNT vulnerabilities found" >> ../scan-results.md
           fi
           
           echo "" >> ../scan-results.md
@@ -91,4 +99,73 @@ jobs:
             scan-results.md
             grype-output.txt
           retention-days: 30
+
+      - name: Send Teams Notification (Only when vulnerabilities found)
+        if: steps.grype-scan.outputs.vulnerabilities_found == 'true'
+        uses: skitionek/notify-microsoft-teams@master
+        with:
+          webhook_url: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          needs: ${{ toJson(needs) }}
+          job: ${{ toJson(job) }}
+          steps: ${{ toJson(steps) }}
+          dry_run: false
+          title: "🚨 SECURITY ALERT: Vulnerabilities Found in Bamboo Plugin"
+          summary: "Grype security scan detected vulnerabilities in checkmarx-ltd/Bamboo-Plugin"
+          theme_color: "FF4444"
+          sections: |
+            [
+              {
+                "activityTitle": "🔍 Grype Security Scan Results",
+                "activitySubtitle": "Vulnerabilities detected - Immediate action required",
+                "facts": [
+                  {
+                    "name": "Repository",
+                    "value": "checkmarx-ltd/Bamboo-Plugin"
+                  },
+                  {
+                    "name": "JAR File",
+                    "value": "${{ steps.find-jar.outputs.jar_file }}"
+                  },
+                  {
+                    "name": "Scan Date",
+                    "value": "${{ github.event.head_commit.timestamp }}"
+                  },
+                  {
+                    "name": "Status",
+                    "value": "⚠️ Vulnerabilities Detected"
+                  }
+                ],
+                "text": "**IMMEDIATE ACTION REQUIRED**\n\n1. Review detailed scan results in workflow artifacts\n2. Prioritize vulnerabilities by severity level\n3. Update affected dependencies\n4. Re-run scan to verify fixes\n\nPlease address these security issues promptly to maintain application security."
+              }
+            ]
+          actions: |
+            [
+              {
+                "@type": "OpenUri",
+                "name": "View Workflow Run",
+                "targets": [
+                  {
+                    "os": "default",
+                    "uri": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  }
+                ]
+              },
+              {
+                "@type": "OpenUri", 
+                "name": "Download Scan Results",
+                "targets": [
+                  {
+                    "os": "default",
+                    "uri": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  }
+                ]
+              }
+            ]
+
+      - name: Log Scan Summary
+        run: |
+          echo "🔍 Grype Security Scan Summary:"
+          echo "- Scan Status: ${{ steps.grype-scan.outputs.scan_status }}"
+          echo "- Vulnerabilities Found: ${{ steps.grype-scan.outputs.vulnerabilities_found }}"
+          echo "- Email Notification: ${{ steps.grype-scan.outputs.vulnerabilities_found == 'true' && 'Sent' || 'Skipped (No vulnerabilities)' }}"
 
