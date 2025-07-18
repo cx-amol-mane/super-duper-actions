@@ -1,5 +1,5 @@
-# GitHub Actions workflow to checkout code and run Grype scan
-name: Grype Security Scan
+# GitHub Actions workflow to checkout code and run Grype scan on multiple repositories
+name: Multi-Repository Security Scan
 
 on:
   push:
@@ -8,32 +8,89 @@ on:
   schedule:
     # Run every Monday at 8:00 AM IST (2:30 AM UTC)
     - cron: '30 2 * * 1'
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: 'Repository to scan (bamboo/jenkins/sonarqube/all)'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+        - all
+        - bamboo
+        - jenkins
+        - sonarqube
 
 env:
   GRYPE_VERSION: "0.96.0" 
 
 jobs:
-  grype-scan:
+  generate-matrix:
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Generate repository matrix
+        id: set-matrix
+        run: |
+          if [ "${{ github.event.inputs.repository }}" = "bamboo" ]; then
+            echo 'matrix={"include":[{"repo":"checkmarx-ltd/Bamboo-Plugin","branch":"master","build":"maven","java":"8","artifact_pattern":"checkmarx-bamboo-plugin-*.jar"}]}' >> $GITHUB_OUTPUT
+          elif [ "${{ github.event.inputs.repository }}" = "jenkins" ]; then
+            echo 'matrix={"include":[{"repo":"jenkinsci/checkmarx-plugin","branch":"master","build":"gradle","java":"8","artifact_pattern":"build/libs/checkmarx.hpi"}]}' >> $GITHUB_OUTPUT
+          elif [ "${{ github.event.inputs.repository }}" = "sonarqube" ]; then
+            echo 'matrix={"include":[{"repo":"checkmarx-ltd/Sonar-Plugin","branch":"master","build":"maven","java":"8","artifact_pattern":"target/com.checkmarx.sonar.cxplugin-*.jar"}]}' >> $GITHUB_OUTPUT
+          else
+            echo 'matrix={"include":[
+              {"repo":"checkmarx-ltd/Bamboo-Plugin","branch":"master","build":"maven","java":"8","artifact_pattern":"checkmarx-bamboo-plugin-*.jar"},
+              {"repo":"jenkinsci/checkmarx-plugin","branch":"master","build":"gradle","java":"8","artifact_pattern":"build/libs/checkmarx.hpi"},
+              {"repo":"checkmarx-ltd/Sonar-Plugin","branch":"master","build":"maven","java":"8","artifact_pattern":"target/com.checkmarx.sonar.cxplugin-*.jar"}
+            ]}' >> $GITHUB_OUTPUT
+          fi
+
+  security-scan:
+    needs: generate-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+      fail-fast: false
     
     steps:
-      - name: Checkout Bamboo-Plugin repository
+      - name: Checkout ${{ matrix.repo }} repository
         uses: actions/checkout@v4
         with:
-          repository: checkmarx-ltd/Bamboo-Plugin
-          path: Bamboo-Plugin
-          ref: master
+          repository: ${{ matrix.repo }}
+          path: source-code
+          ref: ${{ matrix.branch }}
 
-      - name: Setup Java JDK
+      - name: Setup Java JDK ${{ matrix.java }}
         uses: actions/setup-java@v4
         with:
-          java-version: '8'
+          java-version: ${{ matrix.java }}
           distribution: 'temurin'
 
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2
+            ~/.gradle
+          key: ${{ runner.os }}-${{ matrix.build }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.build }}-
+
       - name: Build with Maven
+        if: matrix.build == 'maven'
         run: |
-          cd Bamboo-Plugin
+          cd source-code
           mvn clean install -DskipTests -B -q
+        
+      - name: Build with Gradle
+        if: matrix.build == 'gradle'
+        run: |
+          cd source-code
+          # Make gradlew executable
+          chmod +x ./gradlew
+          ./gradlew build -x test --no-daemon --quiet
         
       - name: Download and Install Grype
         run: |
@@ -42,84 +99,127 @@ jobs:
           sudo mv grype /usr/local/bin/
           grype version
 
-      - name: Find JAR file
-        id: find-jar
+      - name: Find artifact files
+        id: find-artifacts
         run: |
-          cd Bamboo-Plugin
-          JAR_FILE=$(find . -name "checkmarx-bamboo-plugin-*.jar" -not -path "*/target/dependency/*" -not -name "*-sources.jar" -not -name "*-javadoc.jar" | head -1)
-
+          cd source-code
           
-          if [ -z "$JAR_FILE" ]; then
-            echo "❌ JAR file not found!"
+          # Find artifact files based on specific pattern first
+          ARTIFACT_FILES=$(find . -path "*${{ matrix.artifact_pattern }}" 2>/dev/null | head -5)
+          
+          if [ -z "$ARTIFACT_FILES" ]; then
+            echo "❌ No artifact files found with specific pattern: ${{ matrix.artifact_pattern }}"
+            
+            # Repository-specific fallback patterns
+            if [[ "${{ matrix.repo }}" == *"jenkins"* ]]; then
+              # Look for Jenkins .hpi files
+              ARTIFACT_FILES=$(find . -name "*.hpi" -not -path "*/target/dependency/*" | head -5)
+              if [ -z "$ARTIFACT_FILES" ]; then
+                # Fallback to any .jar files in Jenkins
+                ARTIFACT_FILES=$(find . -name "*.jar" | grep -v -E "(sources|javadoc|test)" | head -5)
+              fi
+            elif [[ "${{ matrix.repo }}" == *"Sonar"* ]]; then
+              # Look for SonarQube plugin files
+              ARTIFACT_FILES=$(find . -name "com.checkmarx.sonar.cxplugin-*.jar" | head -5)
+              if [ -z "$ARTIFACT_FILES" ]; then
+                # Fallback to any plugin jar in target
+                ARTIFACT_FILES=$(find ./target -name "*.jar" | grep -v -E "(sources|javadoc|test)" | head -5)
+              fi
+            else
+              # Bamboo and other repositories - look for JAR files
+              ARTIFACT_FILES=$(find . -name "*.jar" | grep -v -E "(sources|javadoc|test|dependency)" | head -5)
+            fi
+          fi
+          
+          if [ -z "$ARTIFACT_FILES" ]; then
+            echo "❌ No artifact files found!"
+            echo "Listing build directories for debugging:"
+            find . -type d -name "target" -o -name "build" -o -name "libs" | head -10
+            echo "Listing all jar/hpi files:"
+            find . -name "*.jar" -o -name "*.hpi" | head -10
             exit 1
           fi
           
-          echo "jar_file=$JAR_FILE" >> $GITHUB_OUTPUT
-          echo "Found JAR file: $JAR_FILE"
-          ls -la "$JAR_FILE"
+          echo "Found artifact files:"
+          echo "$ARTIFACT_FILES"
+          
+          # Convert to comma-separated list for matrix output
+          ARTIFACT_LIST=$(echo "$ARTIFACT_FILES" | tr '\n' ',' | sed 's/,$//')
+          echo "artifact_files=$ARTIFACT_LIST" >> $GITHUB_OUTPUT
 
       - name: Run Grype Security Scan
         id: grype-scan
         run: |
-          cd Bamboo-Plugin
-          echo "## 🔍 Grype Security Scan Results" > ../scan-results.md
-          echo "**Repository:** checkmarx-ltd/Bamboo-Plugin" >> ../scan-results.md
+          cd source-code
+          REPO_NAME=$(echo "${{ matrix.repo }}" | cut -d'/' -f2)
+          
+          echo "## 🔍 Grype Security Scan Results - $REPO_NAME" > ../scan-results.md
+          echo "**Repository:** ${{ matrix.repo }}" >> ../scan-results.md
+          echo "**Build System:** ${{ matrix.build }}" >> ../scan-results.md
+          echo "**Java Version:** ${{ matrix.java }}" >> ../scan-results.md
           echo "**Scan Date:** $(date -u)" >> ../scan-results.md
-          echo "**JAR File:** ${{ steps.find-jar.outputs.jar_file }}" >> ../scan-results.md
           echo "" >> ../scan-results.md
           
-          # Run Grype scan and capture output
-          grype ${{ steps.find-jar.outputs.jar_file }} -o table > ../grype-output.txt 2>&1
-          GRYPE_EXIT_CODE=$?
+          # Scan each artifact file
+          TOTAL_VULNS=0
+          IFS=',' read -ra ARTIFACTS <<< "${{ steps.find-artifacts.outputs.artifact_files }}"
           
-          # Count vulnerabilities found
-          VULN_COUNT=$(grep -c "^\|" ../grype-output.txt | awk '{print $1-1}' || echo "0")
+          for ARTIFACT in "${ARTIFACTS[@]}"; do
+            if [ -f "$ARTIFACT" ]; then
+              echo "### Scanning: $ARTIFACT" >> ../scan-results.md
+              echo "Scanning artifact: $ARTIFACT"
+              
+              # Run Grype scan and capture output
+              grype "$ARTIFACT" -o table > "../grype-output-$(basename $ARTIFACT).txt" 2>&1
+              GRYPE_EXIT_CODE=$?
+              
+              # Count vulnerabilities in this artifact
+              VULN_COUNT=$(grep -c "^\|" "../grype-output-$(basename $ARTIFACT).txt" | awk '{print $1-1}' || echo "0")
+              TOTAL_VULNS=$((TOTAL_VULNS + VULN_COUNT))
+              
+              echo "**Vulnerabilities found in $(basename $ARTIFACT):** $VULN_COUNT" >> ../scan-results.md
+              echo '```' >> ../scan-results.md
+              cat "../grype-output-$(basename $ARTIFACT).txt" >> ../scan-results.md
+              echo '```' >> ../scan-results.md
+              echo "" >> ../scan-results.md
+            fi
+          done
           
-          if [ "$GRYPE_EXIT_CODE" -eq 0 ] && [ "$VULN_COUNT" -le 1 ]; then
-            echo "scan_status=success" >> $GITHUB_OUTPUT
-            echo "vulnerabilities_found=false" >> $GITHUB_OUTPUT
-            echo "### ✅ Scan completed successfully - No vulnerabilities found" >> ../scan-results.md
-          else
+          echo "total_vulnerabilities=$TOTAL_VULNS" >> $GITHUB_OUTPUT
+          echo "repository_name=$REPO_NAME" >> $GITHUB_OUTPUT
+          
+          if [ "$TOTAL_VULNS" -gt 0 ]; then
             echo "scan_status=failed" >> $GITHUB_OUTPUT
             echo "vulnerabilities_found=true" >> $GITHUB_OUTPUT
-            echo "### ⚠️ Vulnerabilities detected - $VULN_COUNT vulnerabilities found" >> ../scan-results.md
+          else
+            echo "scan_status=success" >> $GITHUB_OUTPUT
+            echo "vulnerabilities_found=false" >> $GITHUB_OUTPUT
           fi
-          
-          echo "" >> ../scan-results.md
-          echo "### Detailed Results:" >> ../scan-results.md
-          echo '```' >> ../scan-results.md
-          cat ../grype-output.txt >> ../scan-results.md
-          echo '```' >> ../scan-results.md
 
       - name: Upload Scan Results
         uses: actions/upload-artifact@v4
         with:
-          name: grype-scan-results-${{ github.run_number }}
+          name: grype-scan-results-${{ steps.grype-scan.outputs.repository_name }}-${{ github.run_number }}
           path: |
             scan-results.md
-            grype-output.txt
+            grype-output-*.txt
           retention-days: 30
 
       - name: Send Teams Notification (Only when vulnerabilities found)
         if: steps.grype-scan.outputs.vulnerabilities_found == 'true'
         run: |
-          # Extract vulnerabilities from scan output for Teams message
-          cd Bamboo-Plugin
+          cd source-code
+          REPO_NAME="${{ steps.grype-scan.outputs.repository_name }}"
+          TOTAL_VULNS="${{ steps.grype-scan.outputs.total_vulnerabilities }}"
           
-          echo "Extracting vulnerability details..."
+          echo "Preparing Teams notification for $REPO_NAME..."
           
-          # Simply extract the first 10-15 lines of the scan output for Teams
-          VULN_SUMMARY=$(head -20 ../grype-output.txt | tail -15)
+          # Get a sample of vulnerabilities from the first scan file
+          FIRST_SCAN_FILE=$(ls ../grype-output-*.txt | head -1)
+          VULN_SUMMARY=$(head -15 "$FIRST_SCAN_FILE" | tail -10)
           
-          # If that's empty, try a different approach
-          if [ -z "$VULN_SUMMARY" ]; then
-            VULN_SUMMARY=$(cat ../grype-output.txt | head -15)
-          fi
-          
-          # Escape for JSON (simple approach)
+          # Escape for JSON
           VULN_SUMMARY=$(echo "$VULN_SUMMARY" | sed 's/"/\\"/g' | sed 's/$/\\n/' | tr -d '\n')
-          
-          echo "Vulnerability summary prepared"
           
           # Create Teams message payload
           cat > teams-payload.json << EOF
@@ -127,18 +227,24 @@ jobs:
             "@type": "MessageCard",
             "@context": "http://schema.org/extensions",
             "themeColor": "FF6B6B",
-            "summary": "🚨 Vulnerabilities Found in Bamboo Plugin",
+            "summary": "🚨 Vulnerabilities Found in $REPO_NAME",
             "sections": [{
-              "activityTitle": "🚨 Vulnerabilities Found in Bamboo Plugin",
-              "activitySubtitle": "Grype security scan detected vulnerabilities",
+              "activityTitle": "🚨 Vulnerabilities Found in $REPO_NAME",
+              "activitySubtitle": "$TOTAL_VULNS vulnerabilities detected across artifacts",
               "facts": [{
                 "name": "Repository",
-                "value": "checkmarx-ltd/Bamboo-Plugin"
+                "value": "${{ matrix.repo }}"
               }, {
-                "name": "JAR File",
-                "value": "${{ steps.find-jar.outputs.jar_file }}"
+                "name": "Build System",
+                "value": "${{ matrix.build }}"
+              }, {
+                "name": "Java Version",
+                "value": "${{ matrix.java }}"
+              }, {
+                "name": "Total Vulnerabilities",
+                "value": "$TOTAL_VULNS"
               }],
-              "text": "**Vulnerabilities Detected:**\n\n\`\`\`\n${VULN_SUMMARY}\n\`\`\`\n\nPlease check the workflow run for complete details."
+              "text": "**Sample Vulnerabilities:**\n\n\`\`\`\n${VULN_SUMMARY}\n\`\`\`\n\nPlease check the workflow run for complete details across all artifacts."
             }],
             "potentialAction": [{
               "@type": "OpenUri",
@@ -151,21 +257,20 @@ jobs:
           }
           EOF
           
-          echo "Teams payload created. Content preview:"
-          echo "First 200 characters of vulnerability summary:"
-          echo "$VULN_SUMMARY" | head -c 200
-          echo ""
-          
-          echo "Sending Teams notification..."
-          # Send to Teams
+          echo "Sending Teams notification for $REPO_NAME..."
           curl -H "Content-Type: application/json" -d @teams-payload.json "${{ secrets.TEAMS_WEBHOOK_URL }}"
-          
-          echo "Teams notification sent successfully!"
+          echo "Teams notification sent for $REPO_NAME!"
 
-      - name: Log Scan Summary
+  summary:
+    needs: [generate-matrix, security-scan]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Generate Scan Summary
         run: |
-          echo "🔍 Grype Security Scan Summary:"
-          echo "- Scan Status: ${{ steps.grype-scan.outputs.scan_status }}"
-          echo "- Vulnerabilities Found: ${{ steps.grype-scan.outputs.vulnerabilities_found }}"
-          echo "- Email Notification: ${{ steps.grype-scan.outputs.vulnerabilities_found == 'true' && 'Sent' || 'Skipped (No vulnerabilities)' }}"
+          echo "🔍 Multi-Repository Security Scan Summary"
+          echo "========================================"
+          echo "Scan completed for all configured repositories"
+          echo "Check individual job results for detailed vulnerability information"
+          echo "Teams notifications sent for repositories with vulnerabilities"
 
