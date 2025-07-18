@@ -106,26 +106,22 @@ jobs:
           # Extract vulnerabilities from scan output for Teams message
           cd Bamboo-Plugin
           
-          # Get vulnerability summary with proper formatting
           echo "Extracting vulnerability details..."
           
-          # Create formatted vulnerability list
-          VULN_TEXT=""
-          while IFS= read -r line; do
-            if [[ "$line" =~ ^[[:space:]]*\|.*\|[[:space:]]*$ ]] && [[ ! "$line" =~ ^[[:space:]]*\|[-[:space:]]*\|[[:space:]]*$ ]]; then
-              # Clean up the line and add to VULN_TEXT
-              CLEAN_LINE=$(echo "$line" | sed 's/^[[:space:]]*|[[:space:]]*//' | sed 's/[[:space:]]*|[[:space:]]*$/ /' | sed 's/[[:space:]]*|[[:space:]]*/  |  /g')
-              VULN_TEXT="${VULN_TEXT}${CLEAN_LINE}\n"
-            fi
-          done < ../grype-output.txt
+          # Simply extract the first 10-15 lines of the scan output for Teams
+          VULN_SUMMARY=$(head -20 ../grype-output.txt | tail -15)
           
-          # Limit to first 10 vulnerabilities to avoid message size limits
-          VULN_SUMMARY=$(echo -e "$VULN_TEXT" | head -15)
+          # If that's empty, try a different approach
+          if [ -z "$VULN_SUMMARY" ]; then
+            VULN_SUMMARY=$(cat ../grype-output.txt | head -15)
+          fi
           
-          # Escape quotes and special characters for JSON
-          VULN_SUMMARY=$(echo "$VULN_SUMMARY" | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
+          # Escape for JSON (simple approach)
+          VULN_SUMMARY=$(echo "$VULN_SUMMARY" | sed 's/"/\\"/g' | sed 's/$/\\n/' | tr -d '\n')
           
-          # Create Teams message payload with better formatting
+          echo "Vulnerability summary prepared"
+          
+          # Create Teams message payload
           cat > teams-payload.json << EOF
           {
             "@type": "MessageCard",
@@ -142,7 +138,7 @@ jobs:
                 "name": "JAR File",
                 "value": "${{ steps.find-jar.outputs.jar_file }}"
               }],
-              "text": "**Vulnerabilities Detected:**\\n\\n\`\`\`\\n${VULN_SUMMARY}\\n\`\`\`\\n\\nPlease check the workflow run for complete details."
+              "text": "**Vulnerabilities Detected:**\n\n\`\`\`\n${VULN_SUMMARY}\n\`\`\`\n\nPlease check the workflow run for complete details."
             }],
             "potentialAction": [{
               "@type": "OpenUri",
@@ -154,6 +150,11 @@ jobs:
             }]
           }
           EOF
+          
+          echo "Teams payload created. Content preview:"
+          echo "First 200 characters of vulnerability summary:"
+          echo "$VULN_SUMMARY" | head -c 200
+          echo ""
           
           echo "Sending Teams notification..."
           # Send to Teams
