@@ -100,8 +100,12 @@ jobs:
         run: |
           cd source-code
           
-          # Find artifact files based on specific pattern first (only actual files, not directories)
-          ARTIFACT_FILES=$(find . -path "*${{ matrix.artifact_pattern }}" -type f 2>/dev/null | head -5)
+          # Find artifact files based on specific pattern first (only actual .jar/.hpi files)
+          if [[ "${{ matrix.artifact_pattern }}" == *.jar ]] || [[ "${{ matrix.artifact_pattern }}" == *.hpi ]]; then
+            ARTIFACT_FILES=$(find . -path "*${{ matrix.artifact_pattern }}" -type f -name "*.jar" -o -path "*${{ matrix.artifact_pattern }}" -type f -name "*.hpi" 2>/dev/null | head -5)
+          else
+            ARTIFACT_FILES=$(find . -path "*${{ matrix.artifact_pattern }}" -type f 2>/dev/null | head -5)
+          fi
           
           if [ -z "$ARTIFACT_FILES" ]; then
             echo "❌ No artifact files found with specific pattern: ${{ matrix.artifact_pattern }}"
@@ -115,12 +119,15 @@ jobs:
                 ARTIFACT_FILES=$(find . -name "*.jar" -type f | grep -v -E "(sources|javadoc|test)" | head -5)
               fi
             elif [[ "${{ matrix.repo }}" == *"Sonar"* ]]; then
-              # Look for SonarQube plugin files specifically in target directory
+              # Look for SonarQube plugin files specifically - must end with .jar
               ARTIFACT_FILES=$(find ./target -maxdepth 1 -name "com.checkmarx.sonar.cxplugin-*.jar" -type f | head -5)
               if [ -z "$ARTIFACT_FILES" ]; then
-                # Fallback to any plugin jar in target (but not in subdirectories)
+                # Fallback to any .jar file in target (but not in subdirectories)
                 ARTIFACT_FILES=$(find ./target -maxdepth 1 -name "*.jar" -type f | grep -v -E "(sources|javadoc|test)" | head -5)
               fi
+              # Debug: show what's in target
+              echo "Debug - Contents of target directory:"
+              ls -la ./target/ | grep -E "\.(jar|hpi)$"
             else
               # Bamboo and other repositories - look for JAR files
               ARTIFACT_FILES=$(find . -name "*.jar" -type f | grep -v -E "(sources|javadoc|test|dependency)" | head -5)
@@ -242,7 +249,7 @@ jobs:
                 "name": "Total Vulnerabilities",
                 "value": "$TOTAL_VULNS"
               }],
-              "text": "**Sample Vulnerabilities:**\n\n\`\`\`\n${VULN_SUMMARY}\n\`\`\`\n\nPlease check the workflow run for complete details across all artifacts."
+              "text": "** Vulnerabilities:**\n\n\`\`\`\n${VULN_SUMMARY}\n\`\`\`\n\nPlease check the workflow run for complete details across all artifacts."
             }],
             "potentialAction": [{
               "@type": "OpenUri",
