@@ -38,9 +38,9 @@ jobs:
           elif [ "${{ github.event.inputs.repository }}" = "jenkins" ]; then
             echo 'matrix={"include":[{"repo":"jenkinsci/checkmarx-plugin","branch":"master","build":"gradle","java":"8","artifact_pattern":"build/libs/checkmarx.hpi"}]}' >> $GITHUB_OUTPUT
           elif [ "${{ github.event.inputs.repository }}" = "sonarqube" ]; then
-            echo 'matrix={"include":[{"repo":"checkmarx-ltd/Sonar-Plugin","branch":"master","build":"maven","java":"8","artifact_pattern":"com.checkmarx.sonar.cxplugin-*.jar"}]}' >> $GITHUB_OUTPUT
+            echo 'matrix={"include":[{"repo":"checkmarx-ltd/Sonar-Plugin","branch":"master","build":"maven","java":"8","artifact_pattern":"target/com.checkmarx.sonar.cxplugin-*.jar"}]}' >> $GITHUB_OUTPUT
           else
-            echo 'matrix={"include":[{"repo":"checkmarx-ltd/Bamboo-Plugin","branch":"master","build":"maven","java":"8","artifact_pattern":"checkmarx-bamboo-plugin-*.jar"},{"repo":"jenkinsci/checkmarx-plugin","branch":"master","build":"gradle","java":"8","artifact_pattern":"build/libs/checkmarx.hpi"},{"repo":"checkmarx-ltd/Sonar-Plugin","branch":"master","build":"maven","java":"8","artifact_pattern":"com.checkmarx.sonar.cxplugin-*.jar"}]}' >> $GITHUB_OUTPUT
+            echo 'matrix={"include":[{"repo":"checkmarx-ltd/Bamboo-Plugin","branch":"master","build":"maven","java":"8","artifact_pattern":"checkmarx-bamboo-plugin-*.jar"},{"repo":"jenkinsci/checkmarx-plugin","branch":"master","build":"gradle","java":"8","artifact_pattern":"build/libs/checkmarx.hpi"},{"repo":"checkmarx-ltd/Sonar-Plugin","branch":"master","build":"maven","java":"8","artifact_pattern":"target/com.checkmarx.sonar.cxplugin-*.jar"}]}' >> $GITHUB_OUTPUT
           fi
 
   security-scan:
@@ -100,8 +100,8 @@ jobs:
         run: |
           cd source-code
           
-          # Find artifact files based on specific pattern first
-          ARTIFACT_FILES=$(find . -path "*${{ matrix.artifact_pattern }}" 2>/dev/null | head -5)
+          # Find artifact files based on specific pattern first (only actual files, not directories)
+          ARTIFACT_FILES=$(find . -path "*${{ matrix.artifact_pattern }}" -type f 2>/dev/null | head -5)
           
           if [ -z "$ARTIFACT_FILES" ]; then
             echo "❌ No artifact files found with specific pattern: ${{ matrix.artifact_pattern }}"
@@ -109,21 +109,21 @@ jobs:
             # Repository-specific fallback patterns
             if [[ "${{ matrix.repo }}" == *"jenkins"* ]]; then
               # Look for Jenkins .hpi files
-              ARTIFACT_FILES=$(find . -name "*.hpi" -not -path "*/target/dependency/*" | head -5)
+              ARTIFACT_FILES=$(find . -name "*.hpi" -type f -not -path "*/target/dependency/*" | head -5)
               if [ -z "$ARTIFACT_FILES" ]; then
                 # Fallback to any .jar files in Jenkins
-                ARTIFACT_FILES=$(find . -name "*.jar" | grep -v -E "(sources|javadoc|test)" | head -5)
+                ARTIFACT_FILES=$(find . -name "*.jar" -type f | grep -v -E "(sources|javadoc|test)" | head -5)
               fi
             elif [[ "${{ matrix.repo }}" == *"Sonar"* ]]; then
-              # Look for SonarQube plugin files
-              ARTIFACT_FILES=$(find . -name "com.checkmarx.sonar.cxplugin-*.jar" | head -5)
+              # Look for SonarQube plugin files specifically in target directory
+              ARTIFACT_FILES=$(find ./target -maxdepth 1 -name "com.checkmarx.sonar.cxplugin-*.jar" -type f | head -5)
               if [ -z "$ARTIFACT_FILES" ]; then
-                # Fallback to any plugin jar in target
-                ARTIFACT_FILES=$(find ./target -name "*.jar" | grep -v -E "(sources|javadoc|test)" | head -5)
+                # Fallback to any plugin jar in target (but not in subdirectories)
+                ARTIFACT_FILES=$(find ./target -maxdepth 1 -name "*.jar" -type f | grep -v -E "(sources|javadoc|test)" | head -5)
               fi
             else
               # Bamboo and other repositories - look for JAR files
-              ARTIFACT_FILES=$(find . -name "*.jar" | grep -v -E "(sources|javadoc|test|dependency)" | head -5)
+              ARTIFACT_FILES=$(find . -name "*.jar" -type f | grep -v -E "(sources|javadoc|test|dependency)" | head -5)
             fi
           fi
           
@@ -133,6 +133,8 @@ jobs:
             find . -type d -name "target" -o -name "build" -o -name "libs" | head -10
             echo "Listing all jar/hpi files:"
             find . -name "*.jar" -o -name "*.hpi" | head -10
+            echo "Listing target directory contents:"
+            ls -la ./target/ 2>/dev/null || echo "No target directory found"
             exit 1
           fi
           
