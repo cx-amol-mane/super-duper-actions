@@ -102,62 +102,45 @@ jobs:
 
       - name: Send Teams Notification (Only when vulnerabilities found)
         if: steps.grype-scan.outputs.vulnerabilities_found == 'true'
-        uses: skitionek/notify-microsoft-teams@master
-        with:
-          webhook_url: ${{ secrets.TEAMS_WEBHOOK_URL }}
-          dry_run: false
-          title: "🚨 SECURITY ALERT: Vulnerabilities Found in Bamboo Plugin"
-          summary: "Grype security scan detected vulnerabilities in checkmarx-ltd/Bamboo-Plugin"
-          theme_color: "FF4444"
-          sections: |
-            [
-              {
-                "activityTitle": "🔍 Grype Security Scan Results",
-                "activitySubtitle": "Vulnerabilities detected - Immediate action required",
-                "facts": [
-                  {
-                    "name": "Repository",
-                    "value": "checkmarx-ltd/Bamboo-Plugin"
-                  },
-                  {
-                    "name": "JAR File",
-                    "value": "${{ steps.find-jar.outputs.jar_file }}"
-                  },
-                  {
-                    "name": "Scan Date",
-                    "value": "${{ github.event.head_commit.timestamp }}"
-                  },
-                  {
-                    "name": "Status",
-                    "value": "⚠️ Vulnerabilities Detected"
-                  }
-                ],
-                "text": "**IMMEDIATE ACTION REQUIRED**\n\n1. Review detailed scan results in workflow artifacts\n2. Prioritize vulnerabilities by severity level\n3. Update affected dependencies\n4. Re-run scan to verify fixes\n\nPlease address these security issues promptly to maintain application security."
-              }
-            ]
-          actions: |
-            [
-              {
-                "@type": "OpenUri",
-                "name": "View Workflow Run",
-                "targets": [
-                  {
-                    "os": "default",
-                    "uri": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                  }
-                ]
-              },
-              {
-                "@type": "OpenUri", 
-                "name": "Download Scan Results",
-                "targets": [
-                  {
-                    "os": "default",
-                    "uri": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                  }
-                ]
-              }
-            ]
+        run: |
+          # Extract vulnerabilities from scan output for Teams message
+          cd Bamboo-Plugin
+          
+          # Get vulnerability summary (first 10 lines of vulnerabilities)
+          VULN_SUMMARY=$(grep -A 20 "NAME" ../grype-output.txt | head -15 | sed 's/|/\\|/g' || echo "Check workflow artifacts for detailed vulnerability information.")
+          
+          # Create Teams message payload
+          cat > teams-payload.json << EOF
+          {
+            "@type": "MessageCard",
+            "@context": "http://schema.org/extensions",
+            "themeColor": "FF6B6B",
+            "summary": "🚨 Vulnerabilities Found in Bamboo Plugin",
+            "sections": [{
+              "activityTitle": "🚨 Vulnerabilities Found in Bamboo Plugin",
+              "activitySubtitle": "Grype security scan detected vulnerabilities",
+              "facts": [{
+                "name": "Repository:",
+                "value": "checkmarx-ltd/Bamboo-Plugin"
+              }, {
+                "name": "JAR File:",
+                "value": "${{ steps.find-jar.outputs.jar_file }}"
+              }],
+              "text": "**Vulnerabilities Detected:**\n\n\`\`\`\n${VULN_SUMMARY}\n\`\`\`\n\nPlease check the workflow run for complete details."
+            }],
+            "potentialAction": [{
+              "@type": "OpenUri",
+              "name": "View Workflow Run",
+              "targets": [{
+                "os": "default",
+                "uri": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              }]
+            }]
+          }
+          EOF
+          
+          # Send to Teams
+          curl -H "Content-Type: application/json" -d @teams-payload.json "${{ secrets.TEAMS_WEBHOOK_URL }}"
 
       - name: Log Scan Summary
         run: |
