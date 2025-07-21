@@ -1,5 +1,5 @@
 # GitHub Actions workflow to checkout code and run Grype scan
-name: Grype Security Scan
+name: Grype Security Scan - Bamboo Plugin
 
 on:
   push:
