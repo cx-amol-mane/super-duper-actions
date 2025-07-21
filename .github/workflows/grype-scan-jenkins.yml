@@ -1,0 +1,173 @@
+# GitHub Actions workflow to checkout code and run Grype scan
+name: Grype Security Scan - Jenkins Plugin
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    # Run every Monday at 8:00 AM IST (2:30 AM UTC)
+    - cron: '30 2 * * 1'
+  workflow_dispatch:
+
+env:
+  GRYPE_VERSION: "0.96.0" 
+
+jobs:
+  grype-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Jenkins-Plugin repository
+        uses: actions/checkout@v4
+        with:
+          repository: jenkinsci/checkmarx-plugin
+          path: checkmarx-plugin
+          ref: master
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '8'
+          distribution: 'temurin'
+
+      - name: Build with Gradle
+        run: |
+          cd checkmarx-plugin
+          ./gradlew clean build -x test --quiet
+        
+      - name: Download and Install Grype
+        run: |
+          wget -q https://github.com/anchore/grype/releases/download/v${{ env.GRYPE_VERSION }}/grype_${{ env.GRYPE_VERSION }}_linux_amd64.tar.gz
+          tar -xzf grype_${{ env.GRYPE_VERSION }}_linux_amd64.tar.gz
+          sudo mv grype /usr/local/bin/
+          grype version
+
+      - name: Find HPI file
+        id: find-hpi
+        run: |
+          cd checkmarx-plugin
+          HPI_FILE=$(find . -name "checkmarx.hpi" -o -name "*.hpi" | head -1)
+
+          
+          if [ -z "$HPI_FILE" ]; then
+            echo "❌ HPI file not found!"
+            echo "Looking for available files in build directories:"
+            find . -name "*.hpi" -o -name "*.jar" | head -10
+            exit 1
+          fi
+          
+          echo "hpi_file=$HPI_FILE" >> $GITHUB_OUTPUT
+          echo "Found HPI file: $HPI_FILE"
+          ls -la "$HPI_FILE"
+
+      - name: Run Grype Security Scan
+        id: grype-scan
+        run: |
+          cd checkmarx-plugin
+          echo "## 🔍 Grype Security Scan Results" > ../scan-results.md
+          echo "**Repository:** jenkinsci/checkmarx-plugin" >> ../scan-results.md
+          echo "**Scan Date:** $(date -u)" >> ../scan-results.md
+          echo "**HPI File:** ${{ steps.find-hpi.outputs.hpi_file }}" >> ../scan-results.md
+          echo "" >> ../scan-results.md
+          
+          # Run Grype scan and capture output
+          grype ${{ steps.find-hpi.outputs.hpi_file }} -o table > ../grype-output.txt 2>&1
+          GRYPE_EXIT_CODE=$?
+          
+          # Count vulnerabilities found
+          VULN_COUNT=$(grep -c "^\|" ../grype-output.txt | awk '{print $1-1}' || echo "0")
+          
+          if [ "$GRYPE_EXIT_CODE" -eq 0 ] && [ "$VULN_COUNT" -le 1 ]; then
+            echo "scan_status=success" >> $GITHUB_OUTPUT
+            echo "vulnerabilities_found=false" >> $GITHUB_OUTPUT
+            echo "### ✅ Scan completed successfully - No vulnerabilities found" >> ../scan-results.md
+          else
+            echo "scan_status=failed" >> $GITHUB_OUTPUT
+            echo "vulnerabilities_found=true" >> $GITHUB_OUTPUT
+            echo "### ⚠️ Vulnerabilities detected - $VULN_COUNT vulnerabilities found" >> ../scan-results.md
+          fi
+          
+          echo "" >> ../scan-results.md
+          echo "### Detailed Results:" >> ../scan-results.md
+          echo '```' >> ../scan-results.md
+          cat ../grype-output.txt >> ../scan-results.md
+          echo '```' >> ../scan-results.md
+
+      - name: Upload Scan Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: grype-scan-results-jenkins-${{ github.run_number }}
+          path: |
+            scan-results.md
+            grype-output.txt
+          retention-days: 30
+
+      - name: Send Teams Notification (Only when vulnerabilities found)
+        if: steps.grype-scan.outputs.vulnerabilities_found == 'true'
+        run: |
+          # Extract vulnerabilities from scan output for Teams message
+          cd checkmarx-plugin
+          
+          echo "Extracting vulnerability details..."
+          
+          # Simply extract the first 10-15 lines of the scan output for Teams
+          VULN_SUMMARY=$(head -20 ../grype-output.txt | tail -15)
+          
+          # If that's empty, try a different approach
+          if [ -z "$VULN_SUMMARY" ]; then
+            VULN_SUMMARY=$(cat ../grype-output.txt | head -15)
+          fi
+          
+          # Escape for JSON (simple approach)
+          VULN_SUMMARY=$(echo "$VULN_SUMMARY" | sed 's/"/\\"/g' | sed 's/$/\\n/' | tr -d '\n')
+          
+          echo "Vulnerability summary prepared"
+          
+          # Create Teams message payload
+          cat > teams-payload.json << EOF
+          {
+            "@type": "MessageCard",
+            "@context": "http://schema.org/extensions",
+            "themeColor": "FF6B6B",
+            "summary": "🚨 Vulnerabilities Found in Jenkins Plugin",
+            "sections": [{
+              "activityTitle": "🚨 Vulnerabilities Found in Jenkins Plugin",
+              "activitySubtitle": "Grype security scan detected vulnerabilities",
+              "facts": [{
+                "name": "Repository",
+                "value": "jenkinsci/checkmarx-plugin"
+              }, {
+                "name": "HPI File",
+                "value": "${{ steps.find-hpi.outputs.hpi_file }}"
+              }],
+              "text": "**Vulnerabilities Detected:**\n\n\`\`\`\n${VULN_SUMMARY}\n\`\`\`\n\nPlease check the workflow run for complete details."
+            }],
+            "potentialAction": [{
+              "@type": "OpenUri",
+              "name": "View Workflow Run",
+              "targets": [{
+                "os": "default",
+                "uri": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              }]
+            }]
+          }
+          EOF
+          
+          echo "Teams payload created. Content preview:"
+          echo "First 200 characters of vulnerability summary:"
+          echo "$VULN_SUMMARY" | head -c 200
+          echo ""
+          
+          echo "Sending Teams notification..."
+          # Send to Teams
+          curl -H "Content-Type: application/json" -d @teams-payload.json "${{ secrets.TEAMS_WEBHOOK_URL }}"
+          
+          echo "Teams notification sent successfully!"
+
+      - name: Log Scan Summary
+        run: |
+          echo "🔍 Grype Security Scan Summary:"
+          echo "- Scan Status: ${{ steps.grype-scan.outputs.scan_status }}"
+          echo "- Vulnerabilities Found: ${{ steps.grype-scan.outputs.vulnerabilities_found }}"
+          echo "- Teams Notification: ${{ steps.grype-scan.outputs.vulnerabilities_found == 'true' && 'Sent' || 'Skipped (No vulnerabilities)' }}"
