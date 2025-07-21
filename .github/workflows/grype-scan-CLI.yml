@@ -1,5 +1,5 @@
 # GitHub Actions workflow to checkout code and run Grype scan
-name: Grype Security Scan - Jenkins Plugin
+name: Grype Security Scan - CLI
 
 on:
   push:
@@ -14,27 +14,27 @@ env:
   GRYPE_VERSION: "0.96.0" 
 
 jobs:
-  grype-scan-jenkins:
+  grype-scan-cli:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout Jenkins-Plugin repository
+      - name: Checkout CLI repository
         uses: actions/checkout@v4
         with:
-          repository: jenkinsci/checkmarx-plugin
-          path: checkmarx-plugin
+          repository: checkmarx-ltd/CLI
+          path: CLI
           ref: master
 
       - name: Setup Java JDK
         uses: actions/setup-java@v4
         with:
-          java-version: '8'
+          java-version: '11'
           distribution: 'temurin'
 
-      - name: Build with Gradle
+      - name: Build with Maven
         run: |
-          cd checkmarx-plugin
-          ./gradlew clean build -x test --quiet
+          cd CLI
+          mvn clean install -DskipTests -B -q
         
       - name: Download and Install Grype
         run: |
@@ -43,36 +43,36 @@ jobs:
           sudo mv grype /usr/local/bin/
           grype version
 
-      - name: Find HPI file
-        id: find-hpi
+      - name: Find JAR file
+        id: find-jar
         run: |
-          cd checkmarx-plugin
-          HPI_FILE=$(find . -name "checkmarx.hpi" -o -name "*.hpi" | head -1)
+          cd CLI
+          JAR_FILE=$(find . -name "checkmarx-cli-*.jar" -o -name "cx-cli-*.jar" -o -name "*.jar" | grep -v "sources\|javadoc\|test" | head -1)
 
           
-          if [ -z "$HPI_FILE" ]; then
-            echo "❌ HPI file not found!"
-            echo "Looking for available files in build directories:"
-            find . -name "*.hpi" -o -name "*.jar" | head -10
+          if [ -z "$JAR_FILE" ]; then
+            echo "❌ JAR file not found!"
+            echo "Looking for available JAR files:"
+            find . -name "*.jar" | head -10
             exit 1
           fi
           
-          echo "hpi_file=$HPI_FILE" >> $GITHUB_OUTPUT
-          echo "Found HPI file: $HPI_FILE"
-          ls -la "$HPI_FILE"
+          echo "jar_file=$JAR_FILE" >> $GITHUB_OUTPUT
+          echo "Found JAR file: $JAR_FILE"
+          ls -la "$JAR_FILE"
 
       - name: Run Grype Security Scan
         id: grype-scan
         run: |
-          cd checkmarx-plugin
+          cd CLI
           echo "## 🔍 Grype Security Scan Results" > ../scan-results.md
-          echo "**Repository:** jenkinsci/checkmarx-plugin" >> ../scan-results.md
+          echo "**Repository:** checkmarx-ltd/CLI" >> ../scan-results.md
           echo "**Scan Date:** $(date -u)" >> ../scan-results.md
-          echo "**HPI File:** ${{ steps.find-hpi.outputs.hpi_file }}" >> ../scan-results.md
+          echo "**JAR File:** ${{ steps.find-jar.outputs.jar_file }}" >> ../scan-results.md
           echo "" >> ../scan-results.md
           
           # Run Grype scan and capture output
-          grype ${{ steps.find-hpi.outputs.hpi_file }} -o table > ../grype-output.txt 2>&1
+          grype ${{ steps.find-jar.outputs.jar_file }} -o table > ../grype-output.txt 2>&1
           GRYPE_EXIT_CODE=$?
           
           # Count vulnerabilities found
@@ -97,7 +97,7 @@ jobs:
       - name: Upload Scan Results
         uses: actions/upload-artifact@v4
         with:
-          name: grype-scan-results-jenkins-${{ github.run_number }}
+          name: grype-scan-results-cli-${{ github.run_number }}
           path: |
             scan-results.md
             grype-output.txt
@@ -107,7 +107,7 @@ jobs:
         if: steps.grype-scan.outputs.vulnerabilities_found == 'true'
         run: |
           # Extract vulnerabilities from scan output for Teams message
-          cd checkmarx-plugin
+          cd CLI
           
           echo "Extracting vulnerability details..."
           
@@ -130,16 +130,16 @@ jobs:
             "@type": "MessageCard",
             "@context": "http://schema.org/extensions",
             "themeColor": "FF6B6B",
-            "summary": "🚨 Vulnerabilities Found in Jenkins Plugin",
+            "summary": "🚨 Vulnerabilities Found in CLI",
             "sections": [{
-              "activityTitle": "🚨 Vulnerabilities Found in Jenkins Plugin",
+              "activityTitle": "🚨 Vulnerabilities Found in CLI",
               "activitySubtitle": "Grype security scan detected vulnerabilities",
               "facts": [{
                 "name": "Repository",
-                "value": "jenkinsci/checkmarx-plugin"
+                "value": "checkmarx-ltd/CLI"
               }, {
-                "name": "HPI File",
-                "value": "${{ steps.find-hpi.outputs.hpi_file }}"
+                "name": "JAR File",
+                "value": "${{ steps.find-jar.outputs.jar_file }}"
               }],
               "text": "**Vulnerabilities Detected:**\n\n\`\`\`\n${VULN_SUMMARY}\n\`\`\`\n\nPlease check the workflow run for complete details."
             }],

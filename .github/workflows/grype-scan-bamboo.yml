@@ -14,7 +14,7 @@ env:
   GRYPE_VERSION: "0.96.0" 
 
 jobs:
-  grype-scan:
+  grype-scan-bamboo:
     runs-on: ubuntu-latest
     
     steps:
